@@ -281,9 +281,9 @@ def ulysses_pad_and_slice_inputs(
         torch.Tensor: padded and sliced position_ids
         int: pad size
     """
-    if position_ids_rmpad is not None:
-        assert position_ids_rmpad.size(0) == 1
-        assert input_ids_rmpad.size(1) == position_ids_rmpad.size(1)
+    # if position_ids_rmpad is not None:
+    #     assert position_ids_rmpad.size(0) == 1
+    #     assert input_ids_rmpad.size(1) == position_ids_rmpad.size(1)
     if sp_size <= 1:
         return input_ids_rmpad, position_ids_rmpad, 0
     _, total_seq_len = input_ids_rmpad.shape

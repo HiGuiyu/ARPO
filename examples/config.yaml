@@ -71,6 +71,10 @@ worker:
     score_function: math
     skip_special_tokens: true
 
+env:
+  num_envs: 32
+  screen_size: [1920, 1080]
+
 trainer:
   total_episodes: 15
   logger: ["console", "wandb"]

@@ -155,6 +155,7 @@ def postprocess_data(
     pad_token_id: int,
     left_pad: bool = True,
     truncation: Literal["left", "right", "error"] = "error",
+    labels=None,
 ):
     """Pad or truncate data."""
     assert truncation in ["left", "right", "error"]
@@ -167,6 +168,8 @@ def postprocess_data(
             attention_mask, max_seq_len=max_length, pad_token_id=0, left_pad=left_pad
         )
         position_ids = pad_sequence_to_length(position_ids, max_seq_len=max_length, pad_token_id=0, left_pad=left_pad)
+        if labels is not None:
+            labels = pad_sequence_to_length(labels, max_seq_len=max_length, pad_token_id=-100, left_pad=left_pad)
     elif seq_length > max_length:
         if truncation == "left":  # actually, left truncation may not be reasonable
             input_ids = input_ids[..., -max_length:]
@@ -181,7 +184,10 @@ def postprocess_data(
         else:
             raise NotImplementedError(f"Unknown truncation method {truncation}.")
 
-    return input_ids, attention_mask, position_ids
+    if labels is not None:
+        return input_ids, attention_mask, position_ids, labels
+    else:
+        return input_ids, attention_mask, position_ids
 
 
 def get_constant_schedule_with_warmup(

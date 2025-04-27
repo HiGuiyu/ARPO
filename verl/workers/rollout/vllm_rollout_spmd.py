@@ -73,8 +73,8 @@ class vLLMRollout(BaseRollout):
             dtype=PrecisionType.to_str(PrecisionType.to_dtype(config.dtype)),
             gpu_memory_utilization=config.gpu_memory_utilization,
             enforce_eager=config.enforce_eager,
-            max_model_len=config.prompt_length + config.response_length,
-            max_num_batched_tokens=config.max_num_batched_tokens,
+            # max_model_len=config.prompt_length + config.response_length,
+            # max_num_batched_tokens=config.max_num_batched_tokens,
             enable_sleep_mode=True,
             distributed_executor_backend="external_launcher",
             disable_custom_all_reduce=True,
@@ -95,6 +95,9 @@ class vLLMRollout(BaseRollout):
 
         print(f"Sampling params: {sampling_kwargs}.")
         self.sampling_params = SamplingParams(**sampling_kwargs)
+
+        print(f"Reset sampling_params.n=1")
+        self.sampling_params.n = 1
 
     @contextmanager
     def update_sampling_params(self, **kwargs):

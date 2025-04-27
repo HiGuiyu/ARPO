@@ -16,7 +16,7 @@
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 
 from .transformers.flash_attention_utils import flash_attention_forward
-from .transformers.qwen2_vl import qwen2_vl_attn_forward
+from .transformers.qwen2_vl import qwen2_vl_attn_forward, qwen_2_mixed_modality_forward
 
 
 def apply_ulysses_patch(model_type: str) -> None:
@@ -28,5 +28,8 @@ def apply_ulysses_patch(model_type: str) -> None:
 
         Qwen2VLFlashAttention2.forward = qwen2_vl_attn_forward
         Qwen2_5_VLFlashAttention2.forward = qwen2_vl_attn_forward
+
+        # from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VLForConditionalGeneration
+        # Qwen2VLForConditionalGeneration.forward = qwen_2_mixed_modality_forward
     else:
         raise NotImplementedError(f"Model architecture {model_type} is not supported yet.")

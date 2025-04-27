@@ -86,6 +86,11 @@ class TrainerConfig:
         if self.save_checkpoint_path is None:
             self.save_checkpoint_path = os.path.join("checkpoints", self.project_name, self.experiment_name)
 
+@dataclass
+class EnvConfig:
+    num_envs: int = 32
+    max_steps: int = 15
+    screen_size: Tuple[int, int] = (1920, 1080)
 
 @dataclass
 class PPOConfig:
@@ -93,6 +98,7 @@ class PPOConfig:
     worker: WorkerConfig = field(default_factory=WorkerConfig)
     algorithm: AlgorithmConfig = field(default_factory=AlgorithmConfig)
     trainer: TrainerConfig = field(default_factory=TrainerConfig)
+    env: EnvConfig = field(default_factory=EnvConfig)
 
     def post_init(self):
         self.worker.rollout.prompt_length = self.data.max_prompt_length

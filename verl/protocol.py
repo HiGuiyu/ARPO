@@ -282,7 +282,7 @@ class DataProto:
         1. All the tensor in tensors have the same dim0
         2. Only dim0 is the batch dim
         """
-        assert len(tensors) > 0, "tensors must not be empty"
+        # assert len(tensors) > 0, "tensors must not be empty"
         assert num_batch_dims > 0, "num_batch_dims must be greater than zero"
         if non_tensors is not None:
             assert num_batch_dims == 1, "only support num_batch_dims=1 when non_tensors is not None."

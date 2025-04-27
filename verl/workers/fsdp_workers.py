@@ -16,6 +16,7 @@ The main entry point to run the PPO algorithm
 """
 
 from typing import Literal, Optional, Union
+from contextlib import nullcontext
 
 import numpy as np
 import psutil
@@ -306,6 +307,20 @@ class FSDPWorker(Worker):
             print_gpu_memory_usage("After optimizer init")
         else:
             self.optimizer, self.lr_scheduler = None, None
+        
+    # def _build_grounding_model_rollout(self) -> None:
+    #     tp_size = self.config.rollout.tensor_parallel_size
+    #     dp_size = self.world_size // tp_size
+    #     assert self.world_size % tp_size == 0, (
+    #         f"rollout world size: {self.world_size} is not divisible by tp size: {tp_size}"
+    #     )
+    #     rollout_device_mesh = init_device_mesh("cuda", mesh_shape=(dp_size, tp_size), mesh_dim_names=("dp", "tp"))
+    #     self.grounding_rollout = vLLMRollout(
+    #         model_path=self.config.actor.model.grounding_model_path,
+    #         config=self.config.rollout,
+    #         tokenizer=self.tokenizer,
+    #     )
+    #     print_gpu_memory_usage("After grounding vllm init")
 
     def _build_rollout(self) -> None:
         tp_size = self.config.rollout.tensor_parallel_size
@@ -380,6 +395,8 @@ class FSDPWorker(Worker):
 
         if self._is_rollout:
             self._build_rollout()
+            # only for actor_rollout_ref
+            # self._build_grounding_model_rollout()
 
         if self._is_ref:
             self.ref_policy = DataParallelPPOActor(
@@ -470,12 +487,27 @@ class FSDPWorker(Worker):
         output = output.to("cpu")
         return output
 
-    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
-    def generate_sequences(self, prompts: DataProto):
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def prepare_generate_sequences(self):
         assert self._is_rollout
-
         if self._use_param_offload:
             load_fsdp_model(self.fsdp_module)
+        
+        self.rollout_sharding_manager.__enter__()
+        if self._use_param_offload:
+            offload_fsdp_model(self.fsdp_module)
+
+        if self._use_optimizer_offload:
+            offload_fsdp_optimizer(optimizer=self.optimizer)
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def finish_generate_sequences(self):
+        assert self._is_rollout
+        self.rollout_sharding_manager.__exit__(None, None, None)
+
+    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
+    def generate_sequences(self, prompts: DataProto) -> DataProto:
+        assert self._is_rollout
 
         meta_info = {
             "eos_token_id": self.generation_config.eos_token_id
@@ -486,14 +518,28 @@ class FSDPWorker(Worker):
             else self.tokenizer.pad_token_id,
         }
         prompts.meta_info.update(meta_info)
-        with self.rollout_sharding_manager:
-            # after parameters sync with rollout, offload actor model to CPU
+        # if use_rollout_sharding_manager:
+        #     context_manager = self.rollout_sharding_manager
+        # else:
+        #     context_manager = nullcontext()
+
+        # if use_rollout_sharding_manager:
+        if False:
             if self._use_param_offload:
-                offload_fsdp_model(self.fsdp_module)
+                load_fsdp_model(self.fsdp_module)
 
-            if self._use_optimizer_offload:
-                offload_fsdp_optimizer(optimizer=self.optimizer)
+            with self.rollout_sharding_manager:
+                # after parameters sync with rollout, offload actor model to CPU
+                if self._use_param_offload:
+                    offload_fsdp_model(self.fsdp_module)
 
+                if self._use_optimizer_offload:
+                    offload_fsdp_optimizer(optimizer=self.optimizer)
+
+                prompts = self.rollout_sharding_manager.preprocess_data(prompts)
+                output = self.rollout.generate_sequences(prompts=prompts)
+                output = self.rollout_sharding_manager.postprocess_data(output)
+        else:
             prompts = self.rollout_sharding_manager.preprocess_data(prompts)
             output = self.rollout.generate_sequences(prompts=prompts)
             output = self.rollout_sharding_manager.postprocess_data(output)

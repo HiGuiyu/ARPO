@@ -213,7 +213,8 @@ class DataParallelPPOActor(BasePPOActor):
         self.actor_module.train()
 
         temperature = data.meta_info["temperature"]  # temperature must be in the data.meta_info to avoid slient error
-        select_keys = ["responses", "input_ids", "attention_mask", "position_ids", "old_log_probs", "advantages"]
+        select_keys = ["responses", "input_ids", "attention_mask", "position_ids", "old_log_probs", "advantages", "response_mask"]
+        # select_keys = ["responses", "input_ids", "attention_mask", "position_ids", "old_log_probs", "advantages"]
         if self.config.use_kl_loss and not self.config.disable_kl:
             select_keys.append("ref_log_probs")
 
@@ -244,9 +245,11 @@ class DataParallelPPOActor(BasePPOActor):
                     responses = model_inputs["responses"]
                     response_length = responses.size(1)
                     attention_mask = model_inputs["attention_mask"]
-                    response_mask = attention_mask[:, -response_length:]
+                    response_mask = model_inputs["response_mask"][:, 1:]
+                    # response_mask = attention_mask[:, -response_length:]
                     old_log_probs = model_inputs["old_log_probs"]
-                    advantages = model_inputs["advantages"]
+                    advantages = model_inputs["advantages"][:, 1:]
+                    # breakpoint()
 
                     # all return: (bsz, response_length)
                     log_probs = self._forward_micro_batch(model_inputs, temperature=temperature)
