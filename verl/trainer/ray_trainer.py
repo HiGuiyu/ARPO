@@ -273,6 +273,8 @@ class RayPPOTrainer:
             and config.worker.rollout.n == 1
         ):
             raise ValueError("GRPO and RLOO algorithm need `config.worker.rollout.n > 1`.")
+        
+        print(config)
 
         self.fake_dataset = None
         self._create_dataloader()
@@ -290,20 +292,7 @@ class RayPPOTrainer:
         self.train_dataset = OSWorldTaskConfigDataset(
             data_path=self.config.data.train_files,
         )
-        # self.train_dataset = OSWorldDataset(
-        #     data_path=self.config.data.train_files,
-        #     tokenizer=self.tokenizer,
-        #     processor=self.processor,
-        #     prompt_key=self.config.data.prompt_key,
-        #     answer_key=self.config.data.answer_key,
-        #     image_key=self.config.data.image_key,
-        #     max_prompt_length=self.config.data.max_prompt_length,
-        #     truncation="right",
-        #     format_prompt=self.config.data.format_prompt,
-        #     min_pixels=self.config.data.min_pixels,
-        #     max_pixels=self.config.data.max_pixels,
-        # )
-        data = self.train_dataset[0]
+        # data = self.train_dataset[0]
         # breakpoint()
         # use sampler for better ckpt resume
         if self.config.data.shuffle:
@@ -315,11 +304,10 @@ class RayPPOTrainer:
 
         self.train_dataloader = StatefulDataLoader(
             dataset=self.train_dataset,
-            batch_size=self.config.data.rollout_batch_size // self.config.worker.rollout.n,
+            batch_size=self.config.data.rollout_batch_size,
             sampler=sampler,
             num_workers=8,
             collate_fn=collate_fn,
-            # collate_fn=collate_fn_fake,
             pin_memory=False,
             drop_last=True,
         )
@@ -328,24 +316,9 @@ class RayPPOTrainer:
             data_path=self.config.data.val_files,
         )
         
-        # self.val_dataset = OSWorldDataset(
-        #     data_path=self.config.data.val_files,
-        #     tokenizer=self.tokenizer,
-        #     processor=self.processor,
-        #     prompt_key=self.config.data.prompt_key,
-        #     answer_key=self.config.data.answer_key,
-        #     image_key=self.config.data.image_key,
-        #     max_prompt_length=self.config.data.max_prompt_length,
-        #     truncation="right",
-        #     format_prompt=self.config.data.format_prompt,
-        #     min_pixels=self.config.data.min_pixels,
-        #     max_pixels=self.config.data.max_pixels,
-        # )
         self.val_dataloader = StatefulDataLoader(
             dataset=self.val_dataset,
-            batch_size=len(self.val_dataset)
-            if self.config.data.val_batch_size == -1
-            else self.config.data.val_batch_size,
+            batch_size=min(self.config.env.num_envs, len(self.val_dataset)), # use the same number as envs
             shuffle=False,
             num_workers=8,
             collate_fn=collate_fn,
@@ -392,51 +365,71 @@ class RayPPOTrainer:
         sample_inputs, sample_outputs, sample_labels, sample_scores = [], [], [], []
         reward_metrics_lst = defaultdict(list)
         for batch_dict in self.val_dataloader:
-            test_batch = DataProto.from_single_dict(batch_dict)
-            # Store original inputs
-            input_ids = test_batch.batch["input_ids"]
-            input_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in input_ids]
-            sample_inputs.extend(input_texts)
+            task_configs = batch_dict
 
-            if "multi_modal_inputs" in test_batch.non_tensor_batch.keys():
-                test_gen_batch = test_batch.pop(
+            reset_outputs = ray.get([
+                worker.reset.remote(task_config) for worker, task_config in
+                zip(self.env_workers, task_configs)
+            ])
+
+            self.actor_rollout_wg.prepare_generate_sequences()
+
+            env_outputs = reset_outputs
+            for step_idx in range(self.config.env.max_steps):
+                print(f"Step {step_idx} of {self.config.env.max_steps}: {ray.get([worker.is_done.remote() for worker in self.env_workers])}")
+                num_workers = len(self.env_workers)
+
+                vllm_batch, valid_env_idx = self.prepare_vllm_inputs_full(env_outputs)
+
+                vllm_batch_pad, pad_size = pad_dataproto_to_divisor(vllm_batch, num_workers)
+                
+
+                gen_batch = vllm_batch_pad.pop(
                     batch_keys=["input_ids", "attention_mask", "position_ids"],
                     non_tensor_batch_keys=["raw_prompt_ids", "multi_modal_data", "multi_modal_inputs"],
                 )
-            else:
-                test_gen_batch = test_batch.pop(
-                    batch_keys=["input_ids", "attention_mask", "position_ids"],
-                    non_tensor_batch_keys=["raw_prompt_ids"],
-                )
 
-            test_gen_batch.meta_info = self.config.worker.rollout.val_override_config
-            test_gen_batch, pad_size = pad_dataproto_to_divisor(test_gen_batch, self.actor_rollout_wg.world_size)
-            test_output_gen_batch = self.actor_rollout_wg.generate_sequences(test_gen_batch)
-            test_output_gen_batch = unpad_dataproto(test_output_gen_batch, pad_size=pad_size)
-            print("validation generation end")
+                # override val config
+                gen_batch.meta_info = self.config.worker.rollout.val_override_config
 
-            # Store generated outputs
-            output_ids = test_output_gen_batch.batch["responses"]
-            output_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in output_ids]
-            sample_outputs.extend(output_texts)
-            sample_labels.extend(test_batch.non_tensor_batch["ground_truth"].tolist())
-            test_batch = test_batch.union(test_output_gen_batch)
+                # predict actions
+                action_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch)
+                action_batch_output = unpad_dataproto(action_batch_output, pad_size=pad_size)
+                
+                response_texts = self.tokenizer.batch_decode(action_batch_output.batch['responses'], skip_special_tokens=True)
 
-            # evaluate using reward_function
-            reward_tensor, reward_metrics = self.val_reward_fn(test_batch)
+                cur_valid_envs = [self.env_workers[i] for i in valid_env_idx]
+
+                env_outputs = ray.get([
+                    worker.step.remote(action_text) for worker, action_text in zip(cur_valid_envs, response_texts)
+                ])
+
+                is_all_done = all([x['is_done'] for x in env_outputs])
+                if is_all_done:
+                    break
+
+            eval_results = ray.get([worker.evaluate.remote() for worker in self.env_workers])
+            history_messages = ray.get([worker.get_history_messages.remote() for worker in self.env_workers])
+            self.actor_rollout_wg.finish_generate_sequences()
 
             # Store scores
-            scores = reward_tensor.sum(-1).cpu().tolist()
+            scores = eval_results
+            reward_tensor = torch.tensor(scores, dtype=torch.float32).unsqueeze(-1)
+
+            sample_inputs.extend([task_config['instruction'] for task_config in task_configs])
+            prompts = []
+            for history_message in history_messages:
+                prompts.append(self.processor.apply_chat_template(history_message))
+            
+            sample_outputs.extend(prompts)
+            sample_labels.extend(['none']*len(prompts))
             sample_scores.extend(scores)
 
             reward_tensor_lst.append(reward_tensor)
-            for key, value in reward_metrics.items():
-                reward_metrics_lst[key].extend(value)
 
         self._maybe_log_val_generations(sample_inputs, sample_outputs, sample_labels, sample_scores)
         reward_score = torch.cat(reward_tensor_lst, dim=0).sum(-1).mean().item()
-        val_reward_metrics = {f"val/{key}_reward": value for key, value in reduce_metrics(reward_metrics_lst).items()}
-        return {"val/reward_score": reward_score, **val_reward_metrics}
+        return {"val/reward_score": reward_score}
 
     def init_workers(self) -> None:
         """Init resource pool and worker group"""
@@ -630,14 +623,15 @@ class RayPPOTrainer:
         def get_dataset_item(index):
             return dataset[index]
 
-        # with ThreadPoolExecutor(max_workers=32) as executor:
-        #     batch_dict = list(executor.map(get_dataset_item, range(len(dataset))))
-        batch_dict = [get_dataset_item(i) for i in range(len(dataset))]
+        with ThreadPoolExecutor(max_workers=32) as executor:
+            batch_dict = list(executor.map(get_dataset_item, range(len(dataset))))
+        # batch_dict = [get_dataset_item(i) for i in range(len(dataset))]
         
         batch_dict = collate_fn_dataproto(batch_dict)
         batch = DataProto.from_single_dict(batch_dict)
 
         # uid
+        # use batch to compute norm reward
         batch.non_tensor_batch["uid"] = np.array([x['id'] for x in task_configs], dtype=object)
         batch.non_tensor_batch["task_id"] = np.array([x['id'] for x in task_configs], dtype=object)
 
@@ -655,10 +649,11 @@ class RayPPOTrainer:
         visual_trajs['eval_results'] = eval_results
         visual_trajs['task_configs'] = task_configs
     
-        os.makedirs(self.config.trainer.save_checkpoint_path, exist_ok=True)
-        visual_folder_path = os.path.join(self.config.trainer.save_checkpoint_path, f"global_step_{self.global_step}.pth")
+        # os.makedirs(self.config.trainer.save_checkpoint_path, exist_ok=True)
+        os.makedirs(os.path.join(self.config.trainer.save_checkpoint_path, "trajs"), exist_ok=True)
+        visual_folder_path = os.path.join(self.config.trainer.save_checkpoint_path, "trajs", f"global_step_{self.global_step}.pth")
         torch.save(visual_trajs, visual_folder_path)
-        action_batch_output.save_to_disk(os.path.join(self.config.trainer.save_checkpoint_path, f"global_step_{self.global_step}_batch.pkl"))
+        action_batch_output.save_to_disk(os.path.join(self.config.trainer.save_checkpoint_path, "trajs", f"global_step_{self.global_step}_batch.pkl"))
 
 
     def fit(self):
@@ -676,14 +671,20 @@ class RayPPOTrainer:
 
         # perform validation before training
         # currently, we only support validation using the reward_function.
-        if self.val_reward_fn is not None and self.config.trainer.val_before_train:
+        if self.config.trainer.val_before_train:
             val_metrics = self._validate()
             self.logger.log(data=val_metrics, step=self.global_step)
             if self.config.trainer.val_only:
                 return
 
+        rollout_n = self.config.worker.rollout.n
         for _ in tqdm(range(self.config.trainer.total_episodes), desc="Episode", position=0):
+            iterator = iter(tqdm(self.train_dataloader, desc="Running step", position=1))
+
             for batch_dict in tqdm(self.train_dataloader, desc="Running step", position=1):
+
+                task_configs = [x for x in batch_dict for _ in range(rollout_n)] # interleave
+
                 self.global_step += 1
                 if self.global_step > self.training_steps:
                     break
@@ -692,40 +693,30 @@ class RayPPOTrainer:
 
                 # batch: DataProto = DataProto.from_single_dict(batch_dict)
                 # print(batch_dict)
-                rollout_n = self.config.worker.rollout.n
 
-                assert rollout_n * len(batch_dict) == len(self.env_workers)
-                task_configs = [x for x in batch_dict for _ in range(rollout_n)] # interleave
-
-                print(len(task_configs), len(self.env_workers))
+                print(f"task_num: {len(task_configs)}, env_num: {len(self.env_workers)}")
                 print([config['instruction'] for config in task_configs])
-
-                debug_batch = False
-                if debug_batch:
-                    data_path = os.path.join(self.config.trainer.save_checkpoint_path, f"global_step_{self.global_step}.pth")
-                    data = torch.load(data_path)
-                    history_messages = data['history_messages']
-                    eval_results = data['eval_results']
-                    task_configs = data['task_configs']
-                    rollout_n = 0
-                else:
-                    rollout_n = 1
-                    
 
                 with _timer("step", timing_raw):
                     self.actor_rollout_wg.prepare_generate_sequences()
 
-                    messages_rollout = []
-                    eval_results_rollout = []
-                    for rollout_idx in range(rollout_n):
+                    history_messages_global = []
+                    eval_results_global = []
+                    assert len(task_configs) % len(self.env_workers) == 0, f"task_configs: {len(task_configs)}, env_num: {len(self.env_workers)}"
+
+                    for rollout_idx in range(len(task_configs) // len(self.env_workers)):
+
+                        cur_task_configs = task_configs[rollout_idx * len(self.env_workers):(rollout_idx + 1) * len(self.env_workers)]
                         # generate a batch
                         with _timer(f"gen_{rollout_idx}", timing_raw):  # wg: worker group
 
                             with _timer("env_reset", timing_raw):
                                 reset_outputs = ray.get([
                                     worker.reset.remote(task_config) for worker, task_config in 
-                                    zip(self.env_workers, task_configs)
+                                    zip(self.env_workers, cur_task_configs)
                                 ])
+                                # reset_outputs = ray.get(reset_outputs_ray_objects)
+                                
                             print(f"rollout_n: {rollout_idx} | reset_time: {timing_raw['env_reset']}")
 
                             env_outputs = reset_outputs
@@ -734,9 +725,7 @@ class RayPPOTrainer:
                                 num_workers = len(self.actor_rollout_wg._workers)
 
                                 with _timer("prepare_vllm_inputs", timing_raw):
-                                    # update vllm (tokenizer, processor new message, shift tokens to left-padding)
                                     vllm_batch, valid_env_idx = self.prepare_vllm_inputs_full(env_outputs)
-                                    # vllm_batch, valid_env_idx = self.prepare_vllm_inputs_partial(vllm_batch, env_outputs)
 
                                 print('prepare_vllm_inputs_time: ', timing_raw['prepare_vllm_inputs'])
 
@@ -769,18 +758,16 @@ class RayPPOTrainer:
                             history_messages = ray.get([worker.get_history_messages.remote() for worker in self.env_workers])
                             print(f'Rollout_n: {rollout_idx} |Evaluation results: {eval_results} | Mean acc: {np.mean(eval_results)}')
 
-                            eval_results_rollout.append(eval_results)
-                            messages_rollout.append(history_messages)
+                            eval_results_global.extend(eval_results)
+                            history_messages_global.extend(history_messages)
 
                         if self.global_step % 1 == 0:
                             self.save_rollout_trajectories(action_batch_output, history_messages, eval_results, task_configs)
                                 
                     self.actor_rollout_wg.finish_generate_sequences()
-                    
-                    # continue
-                        
 
-                    batch = self.prepare_grpo_inputs(history_messages, eval_results, task_configs)
+                    batch = self.prepare_grpo_inputs(history_messages_global, eval_results_global, task_configs)
+                    print('Global eval_results: ', sum(eval_results_global)/len(eval_results_global))
 
                     # batch.non_tensor_batch["uid"] = batch.non_tensor_batch["task_id"]
                     # add response_mask
@@ -864,8 +851,7 @@ class RayPPOTrainer:
 
                     # validate
                     if (
-                        self.val_reward_fn is not None
-                        and self.config.trainer.val_freq > 0
+                        self.config.trainer.val_freq > 0
                         and self.global_step % self.config.trainer.val_freq == 0
                     ):
                         with _timer("validation", timing_raw):
@@ -886,16 +872,15 @@ class RayPPOTrainer:
                 self.logger.log(data=metrics, step=self.global_step)
 
         # perform validation after training
-        if self.val_reward_fn is not None:
-            if (
-                val_metrics is None
-                or self.config.trainer.val_freq <= 0
-                or self.global_step % self.config.trainer.val_freq != 0
-            ):
-                val_metrics = self._validate()
-                self.logger.log(data=val_metrics, step=self.global_step)
+        if (
+            val_metrics is None
+            or self.config.trainer.val_freq <= 0
+            or self.global_step % self.config.trainer.val_freq != 0
+        ):
+            val_metrics = self._validate()
+            self.logger.log(data=val_metrics, step=self.global_step)
 
-            print(f"Final validation metrics: {convert_dict_to_str(val_metrics)}")
+        print(f"Final validation metrics: {convert_dict_to_str(val_metrics)}")
 
         if self.config.trainer.save_freq <= 0 or self.global_step % self.config.trainer.save_freq != 0:
             self._save_checkpoint()

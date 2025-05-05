@@ -15,8 +15,8 @@ SYSTEM_PROMPT="""You are helpful assistant."""
     # data.max_response_length=4096 \
 
 NUM_GPUS=8
-NUM_ENVS=16
-ROLLOUT_N=8
+NUM_ENVS=32
+ROLLOUT_N=4
 
 ((ROLLOUT_BSZ = NUM_ENVS/ROLLOUT_N))
 
@@ -56,8 +56,8 @@ python3 -m verl.trainer.main \
     worker.rollout.max_num_batched_tokens=128000 \
     env.num_envs=$NUM_ENVS \
     env.max_steps=15 \
-    trainer.experiment_name=osworld_cot_7b_v8 \
+    trainer.experiment_name=osworld_cot_7b_v11_bsz32_n4 \
     trainer.n_gpus_per_node=$NUM_GPUS \
     trainer.val_before_train=false \
     trainer.val_freq=-1 \
-    trainer.total_episodes=3 
+    trainer.total_episodes=2 

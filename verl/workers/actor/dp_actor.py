@@ -226,6 +226,9 @@ class DataParallelPPOActor(BasePPOActor):
         # Split to make minibatch iterator for updating the actor
         # See PPO paper for details. https://arxiv.org/abs/1707.06347
         mini_batches = data.select(select_keys, non_tensor_select_keys).split(self.config.global_batch_size_per_device)
+        print("data size: ", len(data))
+        print('Global batch Size per device:', self.config.global_batch_size_per_device)
+        print('Gradient accumulation:', self.config.global_batch_size_per_device // self.config.micro_batch_size_per_device_for_update)
 
         metrics = defaultdict(list)
         for _ in range(self.config.ppo_epochs):
@@ -278,6 +281,7 @@ class DataParallelPPOActor(BasePPOActor):
                         metrics["actor/kl_coef"] = self.config.kl_coef
 
                     loss = pg_loss / gradient_accumulation
+                    print(f'pg_loss: {pg_loss}')
                     loss.backward()
 
                     batch_metrics = {

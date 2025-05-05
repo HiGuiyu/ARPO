@@ -229,6 +229,19 @@ def parse_action_to_structure_output(text, factor, origin_resized_height, origin
             # 处理字符串
             action_str = escape_single_quotes(content)
             action_str = "type(content='" + action_str + "')"
+        elif "finished(content" in action_str:
+            def escape_quotes(match):
+                content = match.group(1)  # 获取 content 的值
+                return content
+            
+            # 使用正则表达式进行替换
+            pattern = r"finished\(content='(.*?)'\)"  # 匹配 type(content='...')
+            content = re.sub(pattern, escape_quotes, action_str)
+
+            # 处理字符串
+            action_str = escape_single_quotes(content)
+            action_str = "finished(content='" + action_str + "')"
+            
         all_action.append(action_str)
 
     parsed_actions = [parse_action(action.replace("\n","\\n").lstrip()) for action in all_action]
@@ -689,7 +702,7 @@ class EnvWorker():
                     parsed_response,
                     obs_image_height,
                     obs_image_width,
-                    True
+                    False # input_swap = False, don't use pyperclip
                 )
                 actions.append(pyautogui_code)
         except:
