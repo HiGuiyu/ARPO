@@ -148,6 +148,7 @@ class OSWorldTaskConfigDataset(Dataset):
             task_config = json.load(f)
         
         task_config['domain'] = domain
+        task_config['id'] = task_id
 
         return task_config
 
@@ -195,15 +196,8 @@ class OSWorldDataset(Dataset, ImageProcessMixin):
             add_generation_prompt=True,
         )
 
-        try:
-            image_inputs, video_inputs, video_kwargs = process_vision_info(
+        image_inputs, video_inputs, video_kwargs = process_vision_info(
                 message, return_video_kwargs=True)
-        except Exception as e:
-            # some images from OSWorld are broken and cannot be loaded by process_vision_info
-            print('Exception in process_vision_info:', e)
-            import traceback
-            print(traceback.format_exc())
-            breakpoint()
 
         row_dict = dict()
         row_dict["multi_modal_data"] = {"image": image_inputs} # [PIL.Image, ...]
@@ -245,8 +239,130 @@ class OSWorldDataset(Dataset, ImageProcessMixin):
         row_dict["raw_prompt_ids"] = self.tokenizer.encode(prompt, add_special_tokens=False)
         return row_dict
 
+import ray
+@ray.remote(num_cpus=1)
+class GRPODatasetProcessor:
+    def __init__(self, procosser, tokenizer, max_prompt_length=65000, truncation="right"):
+        self.processor = procosser
+        self.tokenizer = tokenizer
+        self.max_prompt_length = max_prompt_length
+        self.truncation = truncation
 
-class OSWorldGRPODataset(Dataset, ImageProcessMixin):
+    def load_content(self, content):
+        if isinstance(content, str):
+            return content
+        
+        if isinstance(content, list):
+            return ''.join([self.load_content(c) for c in content])
+
+        if isinstance(content, dict):
+            if "text" in content:
+                return content["text"]
+            elif "image" in content:
+                return "<|vision_start|><|image_pad|><|vision_end|>"
+        
+        raise ValueError(f"Unknown content type: {content}")
+
+    def process(self, message):
+        tokenizer = self.tokenizer
+        processor = self.processor
+
+        # get images from message
+        image_inputs, video_inputs, video_kwargs = process_vision_info(
+            message, return_video_kwargs=True)
+        
+        if image_inputs is not None and len(image_inputs) >= 1:
+            input_ids = []
+            labels = []
+            attention_mask = []
+
+            prompts = []
+            image_count = 0
+
+            pixel_values = []
+            image_grid_thw = []
+            for turn_idx, msg in enumerate(message):
+                role = msg['role']
+                content = self.load_content(msg['content'])
+                prompt = f'<|im_start|>{role}\n' + content + '<|im_end|>\n'
+                prompts.append(prompt)
+
+                cur_image_num = prompt.count("<|image_pad|>")                
+                if cur_image_num > 0:
+                    result = processor(image_inputs[image_count:image_count+cur_image_num], [prompt], add_special_tokens=False, return_tensors="pt")
+                    image_count += cur_image_num
+                else:
+                    result = processor(None, [prompt], add_special_tokens=False, return_tensors="pt")
+                
+                cur_input_ids = result.pop('input_ids')[0]
+                cur_attention_mask = result.pop('attention_mask')[0]
+                if 'pixel_values' in result: # 10764, 1176
+                    pixel_values.append(result["pixel_values"])
+                if 'image_grid_thw' in result:
+                    image_grid_thw.append(result["image_grid_thw"])
+                
+
+                input_ids.append(cur_input_ids)
+                attention_mask.append(cur_attention_mask)
+                if role in ["system", "user"]:
+                    labels.append(torch.full_like(cur_input_ids, -100))
+                else:
+                    labels.append(cur_input_ids)
+
+            input_ids = torch.cat(input_ids, dim=0)
+            labels = torch.cat(labels, dim=0)
+            attention_mask = torch.cat(attention_mask, dim=0)
+
+            pixel_values = torch.cat(pixel_values, dim=0) if len(pixel_values) > 0 else None
+            image_grid_thw = torch.cat(image_grid_thw, dim=0) if len(image_grid_thw) > 0 else None
+
+            model_inputs = {
+                'pixel_values': pixel_values,
+                'image_grid_thw': image_grid_thw,
+            }
+
+            # pixel_values: (53820, 1176)
+            # image_grid_thw: (5, 3)  [1, 78, 138]
+            # prompt = processor.apply_chat_template(message, tokenize=False, add_generation_prompt=False)
+            # result_old = processor(image_inputs, [prompt], add_special_tokens=False, return_tensors="pt")
+            # prompts_cat = ''.join(prompts)
+            # print(prompt == prompts_cat)
+            # breakpoint()
+
+            position_ids = get_rope_index(
+                self.processor,
+                input_ids=input_ids,
+                image_grid_thw=model_inputs["image_grid_thw"],
+                attention_mask=attention_mask,
+            )
+        else:
+            input_ids = torch.zeros((0,), dtype=torch.int64)
+            labels = torch.full((0,), IGNORE_INDEX, dtype=torch.int64)
+            attention_mask = torch.zeros((0,), dtype=torch.int64)
+            position_ids = torch.zeros((3, 0), dtype=torch.int64)
+            model_inputs = dict()
+
+        input_ids, attention_mask, position_ids, labels = VF.postprocess_data(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            max_length=self.max_prompt_length,
+            pad_token_id=self.tokenizer.pad_token_id,
+            left_pad=True,
+            truncation=self.truncation,
+            labels=labels
+        )
+        row_dict = dict()
+        row_dict["input_ids"] = input_ids
+        row_dict["labels"] = labels
+        row_dict["attention_mask"] = attention_mask
+        row_dict["position_ids"] = position_ids
+        row_dict["multi_modal_inputs"] = model_inputs
+        return row_dict
+        # return input_ids, labels, attention_mask, position_ids, model_inputs
+
+
+class OSWorldGRPODataset(ImageProcessMixin):
     """
     We assume the dataset contains a column that contains prompts and other information
     """

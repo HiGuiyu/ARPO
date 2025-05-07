@@ -226,8 +226,9 @@ class DataParallelPPOActor(BasePPOActor):
         # Split to make minibatch iterator for updating the actor
         # See PPO paper for details. https://arxiv.org/abs/1707.06347
         mini_batches = data.select(select_keys, non_tensor_select_keys).split(self.config.global_batch_size_per_device)
-        print("data size: ", len(data))
+        print("data size: ", len(data), len(mini_batches))
         print('Global batch Size per device:', self.config.global_batch_size_per_device)
+        print('micro batch size per device for update:', self.config.micro_batch_size_per_device_for_update)
         print('Gradient accumulation:', self.config.global_batch_size_per_device // self.config.micro_batch_size_per_device_for_update)
 
         metrics = defaultdict(list)

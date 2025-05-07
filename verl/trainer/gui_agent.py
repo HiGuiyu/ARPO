@@ -518,13 +518,13 @@ def add_box_token(input_string):
 
 
 
-@ray.remote
+@ray.remote(num_cpus=1)
 class EnvWorker():
     system_prompt = uitars_system_prompt
     
     ground_prompt = r"""Output only the coordinate of one point in your response. What element matches the following task: """
 
-    def __init__(self, worker_idx, max_steps=12):
+    def __init__(self, worker_idx, max_steps=15):
         self.worker_idx = worker_idx
         self.step_timeout = 60
         self.model = 'uitars'
@@ -655,7 +655,7 @@ class EnvWorker():
         self.history_images = [init_image]
         self.history_messages = init_messages
 
-        return {'env_idx': self.worker_idx, 'obs_messages': self.history_messages, 'is_done': self.is_done}
+        return {'env_idx': self.worker_idx, 'obs_messages': self.history_messages, 'is_done': self.is_done, 'format_reward': 0.0}
     
     def step(self, prediction):
         self.is_init = False
@@ -705,9 +705,12 @@ class EnvWorker():
                     False # input_swap = False, don't use pyperclip
                 )
                 actions.append(pyautogui_code)
+            
+            format_reward = 0.0
         except:
             print('Parse action error: ', prediction)
             print('Error traceback: ', traceback.format_exc())
+            format_reward = -1.0
             actions = ['DONE'] # error output format, stop the trajectory immediately
 
         action_timestamp = datetime.datetime.now().strftime("%Y%m%d@%H%M%S")
@@ -758,9 +761,9 @@ class EnvWorker():
                     }
                 ]
             })
-            return {'env_idx': self.worker_idx, 'obs_messages': self.history_messages, 'is_done': self.is_done}
+            return {'env_idx': self.worker_idx, 'obs_messages': self.history_messages, 'is_done': self.is_done, 'format_reward': format_reward}
         else:
-            return {'env_idx': self.worker_idx, 'obs_messages': None, 'is_done': self.is_done}
+            return {'env_idx': self.worker_idx, 'obs_messages': None, 'is_done': self.is_done, 'format_reward': format_reward}
             
     
     def evaluate(self):
