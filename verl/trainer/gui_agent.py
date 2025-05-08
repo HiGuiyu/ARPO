@@ -573,11 +573,11 @@ class EnvWorker():
                 print('Env reset error: ', traceback.format_exc())
                 trial_time += 1
         
-        if trial_time >= 3:
+        if trial_time >= 8:
             self.is_init = True
             self.is_done = True
-            print('Env reset failed after 3 trials: ', task_config)
-            return {"env_idx": self.worker_idx, "obs_messages": None, "is_done": self.is_done}
+            print('Env reset failed after 8 trials: ', task_config)
+            return {"env_idx": self.worker_idx, "obs_messages": None, "is_done": self.is_done, 'format_reward': 0.0}
 
         # self.agent.reset()
         self.is_init = True
@@ -746,7 +746,7 @@ class EnvWorker():
             if obs['screenshot'] is None:
                 self.is_done = True
                 # failed to get screenshot
-                return {'env_idx': self.worker_idx, 'obs_messages': None, 'is_done': self.is_done}
+                return {'env_idx': self.worker_idx, 'obs_messages': None, 'is_done': self.is_done, 'format_reward': format_reward}
 
             image_base64 = base64.b64encode(BytesIO(obs['screenshot']).getvalue()).decode('utf-8')
 

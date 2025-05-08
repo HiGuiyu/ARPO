@@ -41,6 +41,8 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = False) -> Dict[str
     max_prompt_length = prompt_mask.size(-1)
     prompt_length = prompt_mask.sum(-1).float()
     response_length = response_mask.sum(-1).float()
+    num_images = (batch.batch["input_ids"] == 151655).bool().sum(-1).float() // 2691 # image_pad
+    response_length = response_length / num_images # average response length per action
 
     valid_adv = torch.masked_select(advantages, response_mask)
     valid_returns = torch.masked_select(returns, response_mask)
@@ -81,6 +83,7 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = False) -> Dict[str
             else {}
         ),
         # response length
+        "response_length/num_images": torch.mean(num_images).detach().item(),
         "response_length/mean": torch.mean(response_length).detach().item(),
         "response_length/max": torch.max(response_length).detach().item(),
         "response_length/min": torch.min(response_length).detach().item(),

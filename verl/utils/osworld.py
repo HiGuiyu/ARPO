@@ -149,6 +149,7 @@ class OSWorldTaskConfigDataset(Dataset):
         
         task_config['domain'] = domain
         task_config['id'] = task_id
+        task_config["task_id"] = task_id
 
         return task_config
 

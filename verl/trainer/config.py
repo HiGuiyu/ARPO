@@ -61,6 +61,7 @@ class AlgorithmConfig:
     kl_type: str = "fixed"
     kl_horizon: float = 0.0
     kl_target: float = 0.0
+    enable_replay: bool = False
 
 
 @dataclass
