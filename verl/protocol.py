@@ -187,11 +187,25 @@ class DataProto:
         else:
             return 0
 
-    def __getitem__(self, item: Union[int, slice]) -> Union["DataProto", "DataProtoItem"]:
-        tensor_data = self.batch[item]
-        non_tensor_data = {key: val[item] for key, val in self.non_tensor_batch.items()}
-        return_type = DataProto if isinstance(item, slice) else DataProtoItem
-        return return_type(batch=tensor_data, non_tensor_batch=non_tensor_data, meta_info=self.meta_info)
+    # def __getitem__(self, item: Union[int, slice]) -> Union["DataProto", "DataProtoItem"]:
+    #     tensor_data = self.batch[item]
+    #     non_tensor_data = {key: val[item] for key, val in self.non_tensor_batch.items()}
+    #     return_type = DataProto if isinstance(item, slice) else DataProtoItem
+    #     return return_type(batch=tensor_data, non_tensor_batch=non_tensor_data, meta_info=self.meta_info)
+
+    def __getitem__(self, item: Union[int, slice, List[int], torch.Tensor]) -> Union["DataProto", "DataProtoItem"]:
+        if isinstance(item, (int, slice)):
+            tensor_data = self.batch[item]
+            non_tensor_data = {key: val[item] for key, val in self.non_tensor_batch.items()}
+            return_type = DataProto if isinstance(item, slice) else DataProtoItem
+            return return_type(batch=tensor_data, non_tensor_batch=non_tensor_data, meta_info=self.meta_info)
+        elif isinstance(item, (list, torch.Tensor)):
+            indices = torch.tensor(item) if isinstance(item, list) else item
+            new_dp = self.select(deepcopy=True)  # 复制一个副本
+            new_dp.reorder(indices)
+            return new_dp
+        else:
+            raise TypeError(f"Unsupported index type: {type(item)}")
 
     def __getstate__(self) -> Tuple[bytes, Dict[str, NDArray], Dict[str, Any]]:
         buffer = io.BytesIO()

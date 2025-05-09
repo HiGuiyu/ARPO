@@ -15,7 +15,7 @@
 FSDP PPO Trainer with Ray-based single controller.
 This trainer supports model-agonistic model initialization with huggingface
 """
-
+import re
 import json
 import os
 import uuid
@@ -293,17 +293,54 @@ class RayPPOTrainer:
 
 
 
+    # def _create_envs_single(self) -> None:
+    #     print('Start to create env_worker for OSWorld Environment')
+    #     max_steps = self.config.env.max_steps
+    #     self.env_workers = [EnvWorker.remote(i, max_steps) for i in range(self.config.env.num_envs)]
+    #     print('Env_worker for OSWorld Environment created!')
+
+    #     self.data_processor_workers = [
+    #         GRPODatasetProcessor.remote(self.processor, self.tokenizer, max_prompt_length=self.config.data.max_prompt_length)
+    #         for i in range(self.config.env.num_envs)
+    #     ]
     def _create_envs(self) -> None:
+        """
+        Create env workers and data-processor workers, 
+        and pin each EnvWorker to a different node (round-robin).
+        """
         print('Start to create env_worker for OSWorld Environment')
         max_steps = self.config.env.max_steps
-        self.env_workers = [EnvWorker.remote(i, max_steps) for i in range(self.config.env.num_envs)]
-        print('Env_worker for OSWorld Environment created!')
+        num_envs = self.config.env.num_envs
 
+        # 1) 从 cluster_resources 里挑出自定义的 IP 资源标签
+        #    cluster_resources() 里还会有 "CPU"/"GPU"/"memory" 等内置资源，我们要过滤掉
+        all_res = ray.cluster_resources().keys()
+        # ip_labels = [r for r in all_res if re.match(r"^\d+\.\d+\.\d+\.\d+$", r)]
+        ip_labels = [r for r in all_res if re.match(r"^docker:\d+\.\d+\.\d+\.\d+$", r)]
+        if not ip_labels:
+            raise RuntimeError("没找到任何 IP 资源标签，请检查 ray start 时 --resources 参数")
+
+        # 2) 按 round-robin 方式，把每个 env worker pin 到不同节点
+        self.env_workers = []
+        for i in range(num_envs):
+            ip_label = ip_labels[i % len(ip_labels)]
+            w = EnvWorker.options(
+                    resources={ ip_label: 1 },   # 保证这个 actor 一定被调度到拥有 ip_label 资源的节点
+                    name=f"env_worker_{i}"
+                ).remote(i, max_steps)
+            self.env_workers.append(w)
+
+        print(f'Env_worker for OSWorld Environment created!  total: {len(self.env_workers)}')
+
+        # 3) 数据预处理器，放在 driver 或随意放一个节点上都行
         self.data_processor_workers = [
-            GRPODatasetProcessor.remote(self.processor, self.tokenizer, max_prompt_length=self.config.data.max_prompt_length)
-            for i in range(self.config.env.num_envs)
-        ]
-            
+            GRPODatasetProcessor.remote(
+                self.processor,
+                self.tokenizer,
+                max_prompt_length=self.config.data.max_prompt_length
+            )
+            for _ in range(num_envs)
+        ] 
             
     def _create_dataloader(self) -> None:
         self.train_dataset = OSWorldTaskConfigDataset(
@@ -387,10 +424,11 @@ class RayPPOTrainer:
             num_tasks = len(task_configs)
             assert num_tasks <= self.config.env.num_envs
 
-            reset_outputs = ray.get([
+            futures = [
                 worker.reset.remote(task_config) for worker, task_config in
                 zip(self.env_workers[:num_tasks], task_configs)
-            ])
+            ]
+            reset_outputs = ray.get(futures)
 
             self.actor_rollout_wg.prepare_generate_sequences()
 
@@ -419,15 +457,16 @@ class RayPPOTrainer:
 
                 cur_valid_envs = [self.env_workers[i] for i in valid_env_idx]
 
-                env_outputs = ray.get([
-                    worker.step.remote(action_text) for worker, action_text in zip(cur_valid_envs, response_texts)
-                ])
+                futures = [worker.step.remote(action_text) for worker, action_text in zip(cur_valid_envs, response_texts)]
+                env_outputs = ray.get(futures)
 
                 is_all_done = all([x['is_done'] for x in env_outputs])
                 if is_all_done:
                     break
 
-            eval_results = ray.get([worker.evaluate.remote() for worker in self.env_workers[:num_tasks]])
+            futures = [worker.evaluate.remote() for worker in self.env_workers[:num_tasks]]
+            eval_results = ray.get(futures)
+
             history_messages = ray.get([worker.get_history_messages.remote() for worker in self.env_workers[:num_tasks]])
             self.actor_rollout_wg.finish_generate_sequences()
 
@@ -614,7 +653,7 @@ class RayPPOTrainer:
         def get_dataset_item(index):
             return dataset[index]
 
-        with ThreadPoolExecutor(max_workers=256) as executor:
+        with ThreadPoolExecutor(max_workers=64) as executor:
             batch_dict = list(executor.map(get_dataset_item, range(len(dataset))))
 
         # batch_dict = ray.get([get_dataset_item.remote(i) for i in range(len(dataset))])
@@ -780,9 +819,10 @@ class RayPPOTrainer:
 
                                 cur_valid_envs = [self.env_workers[i] for i in valid_env_idx]
                                 with _timer("env_step", timing_raw):
-                                    env_outputs = ray.get([
+                                    futures = [
                                         worker.step.remote(action_text) for worker, action_text in zip(cur_valid_envs, response_texts)
-                                    ])
+                                    ]
+                                    env_outputs = ray.get(futures)
                                 print('env_step_time: ', timing_raw['env_step'])
                                 # get format rewards
                                 for single_output in env_outputs:
@@ -803,33 +843,18 @@ class RayPPOTrainer:
 
                             # NOTE: make sure num_envs == len(task_configs) to reduce evaluate time
                             eval_results = [worker.evaluate.remote() for worker in self.env_workers]
-                            eval_results = ray.get(eval_results)
 
                             with _timer("preprocess", timing_raw):
                                 process_results_global.extend(ray.get(process_results))
                                 
                             print('preprocess_time: ', timing_raw['preprocess'])
-                            
-                            task_configs_replay, history_messages_replay, eval_results_replay = self.replay.get_batch(task_configs, eval_results)
-                            self.replay.update_replay_buffer_batch(task_configs, history_messages, eval_results)
-                            task_configs = task_configs + task_configs_replay
-
-                            with _timer("preprocess_replay", timing_raw):
-                                process_results_replay = ray.get([process_worker.process.remote(message) for message, process_worker in zip(history_messages_replay, self.data_processor_workers)])
-                            process_results_global.extend(process_results_replay)
-
 
                             eval_results_global.extend(eval_results)
-                            eval_results_global.extend(eval_results_replay)
-
                             history_messages_global.extend(history_messages)
-                            history_messages_global.extend(history_messages_replay)
-
                             format_rewards_global.extend(format_rewards)
-                            format_rewards_global.extend([0.0] * len(format_rewards))
 
                         # if self.global_step % 1 == 0:
-                        #     self.save_rollout_trajectories(action_batch_output, history_messages, eval_results, task_configs)
+                            # self.save_rollout_trajectories(action_batch_output, history_messages, eval_results, task_configs)
                                 
                     self.actor_rollout_wg.finish_generate_sequences()
 
@@ -852,7 +877,9 @@ class RayPPOTrainer:
 
                     # compute reward
                     with _timer("reward", timing_raw):
-                        # eval_results_global = ray.get(eval_results_global)
+                        eval_results_global = ray.get(eval_results_global)
+                        self.save_rollout_trajectories(action_batch_output, history_messages_global, eval_results_global, task_configs)
+
                         rewards = torch.tensor([float(x) for x in eval_results_global], dtype=torch.float32) + 0.5 * torch.tensor([float(x) for x in format_rewards_global], dtype=torch.float32)
                         batch.batch["rewards"] = rewards
 
@@ -860,13 +887,26 @@ class RayPPOTrainer:
                             raise NotImplementedError("Reward model is not supported yet.")
 
                         task_id_set = set(batch.non_tensor_batch["task_id"])
+                        valid_task_id_set = set()
 
                         reward_stds_list = []
+                        valid_mask = torch.zeros(len(batch), dtype=torch.bool)
                         for task_id in task_id_set:
                             reward_in_group = batch.batch["rewards"][batch.non_tensor_batch["task_id"] == task_id]
                             # compute std in gruop
                             reward_std = reward_in_group.std().item()
+                            if reward_std > 0.05:
+                                # add to valid_indices
+                                valid_mask |= torch.from_numpy(batch.non_tensor_batch["task_id"] == task_id)
                             reward_stds_list.append(reward_std)
+                        
+                        # filter invalid group (with reward std < 0.05)
+                        # new_batch = batch[valid_mask]
+                        # minimal_groups = len(batch) // 2
+                        # if len(new_batch) < minimal_groups:
+                        #     pad_num = minimal_groups - len(new_batch)
+                        #     new_batch = DataProto.concat([new_batch, batch[:pad_num]])
+                        # batch = new_batch
                         
                         num_invalid_group = len([x_std for x_std in reward_stds_list if x_std < 0.01])
                         print(f"num_invalid_group: {num_invalid_group}/{len(reward_stds_list)} | reward_stds_list: {reward_stds_list}")

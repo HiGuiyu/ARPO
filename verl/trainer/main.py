@@ -29,7 +29,7 @@ from .ray_trainer import RayPPOTrainer, ResourcePoolManager, Role
 
 
 # please make sure main_task is not scheduled on head
-@ray.remote(num_cpus=1)
+@ray.remote(num_cpus=1, resources={"docker:10.1.1.3": 1})
 class Runner:
     """A runner for RL training."""
 
@@ -100,6 +100,8 @@ def main():
     if not ray.is_initialized():
         # this is for local ray cluster
         ray.init(runtime_env={"env_vars": {"TOKENIZERS_PARALLELISM": "true", "NCCL_DEBUG": "WARN"}})
+    
+    print(ray.cluster_resources().keys())
 
     runner = Runner.remote()
     ray.get(runner.run.remote(ppo_config))

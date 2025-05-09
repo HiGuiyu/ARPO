@@ -533,7 +533,7 @@ class EnvWorker():
             provider_name="docker", 
             action_space="pyautogui",
             screen_size=(1920, 1080),
-            cache_dir=f"cache_dirs/cache_{self.worker_idx}",
+            cache_dir=f"cache_dirs/cache_{self.worker_idx%32}",
             headless=True,
             os_type="Ubuntu",
             require_a11y_tree=False
@@ -564,7 +564,7 @@ class EnvWorker():
         self.is_done = False
 
         trial_time = 0
-        while trial_time < 3:
+        while trial_time < 8:
             try:
                 obs = self.env.reset(task_config)
                 break
@@ -655,9 +655,12 @@ class EnvWorker():
         self.history_images = [init_image]
         self.history_messages = init_messages
 
+        # since the prediction time can be very long for multienv, we pause the env to avoid automatically locking screen. 
+        self.env.pause()
         return {'env_idx': self.worker_idx, 'obs_messages': self.history_messages, 'is_done': self.is_done, 'format_reward': 0.0}
     
     def step(self, prediction):
+
         self.is_init = False
 
         # 1. parse to structure output, might exception
@@ -714,6 +717,8 @@ class EnvWorker():
             actions = ['DONE'] # error output format, stop the trajectory immediately
 
         action_timestamp = datetime.datetime.now().strftime("%Y%m%d@%H%M%S")
+
+        self.env.unpause()
         for action in actions:
             obs, reward, step_done, info = self.env.step(action)
         
@@ -733,6 +738,8 @@ class EnvWorker():
                 "action_timestamp": action_timestamp,
             }
         
+        self.env.pause()
+
         self.history_images.append(obs['screenshot'])
         self.history_messages.append({
             "role": "assistant",
@@ -768,6 +775,8 @@ class EnvWorker():
     
     def evaluate(self):
         try:
+            self.env.unpause()
+            # we dont care the env after evaluation, since the reset will destroy it and create new env.
             return self.env.evaluate()
         except Exception as e:
             print(f"Evaluation error: {e}")
