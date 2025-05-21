@@ -308,19 +308,6 @@ class FSDPWorker(Worker):
         else:
             self.optimizer, self.lr_scheduler = None, None
         
-    # def _build_grounding_model_rollout(self) -> None:
-    #     tp_size = self.config.rollout.tensor_parallel_size
-    #     dp_size = self.world_size // tp_size
-    #     assert self.world_size % tp_size == 0, (
-    #         f"rollout world size: {self.world_size} is not divisible by tp size: {tp_size}"
-    #     )
-    #     rollout_device_mesh = init_device_mesh("cuda", mesh_shape=(dp_size, tp_size), mesh_dim_names=("dp", "tp"))
-    #     self.grounding_rollout = vLLMRollout(
-    #         model_path=self.config.actor.model.grounding_model_path,
-    #         config=self.config.rollout,
-    #         tokenizer=self.tokenizer,
-    #     )
-    #     print_gpu_memory_usage("After grounding vllm init")
 
     def _build_rollout(self) -> None:
         tp_size = self.config.rollout.tensor_parallel_size
@@ -396,7 +383,6 @@ class FSDPWorker(Worker):
         if self._is_rollout:
             self._build_rollout()
             # only for actor_rollout_ref
-            # self._build_grounding_model_rollout()
 
         if self._is_ref:
             self.ref_policy = DataParallelPPOActor(

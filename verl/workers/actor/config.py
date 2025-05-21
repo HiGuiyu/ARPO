@@ -22,7 +22,6 @@ from typing import Any, Dict, Optional, Tuple
 @dataclass
 class ModelConfig:
     model_path: Optional[str] = None
-    grounding_model_path: Optional[str] = None
     tokenizer_path: Optional[str] = None
     override_config: Dict[str, Any] = field(default_factory=dict)
     enable_gradient_checkpointing: bool = True

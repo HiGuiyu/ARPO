@@ -8,6 +8,8 @@ from io import BytesIO
 import base64
 import datetime
 import traceback
+import torch
+from qwen_vl_utils import process_vision_info
 
 from desktop_env.desktop_env import DesktopEnv
 
@@ -516,7 +518,10 @@ def add_box_token(input_string):
     return final_string
 
 
+from ..utils.tokenizer import get_processor, get_tokenizer
 
+import verl.utils.torch_functional as VF
+from ..models.transformers.qwen2_vl import get_rope_index
 
 @ray.remote(num_cpus=1)
 class EnvWorker():
@@ -524,16 +529,30 @@ class EnvWorker():
     
     ground_prompt = r"""Output only the coordinate of one point in your response. What element matches the following task: """
 
-    def __init__(self, worker_idx, max_steps=15):
+    def __init__(self, worker_idx, max_steps=15, config=None):
         self.worker_idx = worker_idx
         self.step_timeout = 60
+        self.config = config
+
+        self.tokenizer = get_tokenizer(
+            config.worker.actor.model.model_path,
+            trust_remote_code=config.worker.actor.model.trust_remote_code,
+            use_fast=True,
+        )
+        self.processor = get_processor(
+            config.worker.actor.model.model_path,
+            trust_remote_code=config.worker.actor.model.trust_remote_code,
+            use_fast=True,
+        )
+
         self.model = 'uitars'
         print('Start to create desktop_env.')
         self.env = DesktopEnv(
             provider_name="docker", 
             action_space="pyautogui",
             screen_size=(1920, 1080),
-            cache_dir=f"cache_dirs/cache_{self.worker_idx%32}",
+            cache_dir=f"cache_dirs/cache_0",
+            # cache_dir=f"cache_dirs/cache_{self.worker_idx%32}",
             headless=True,
             os_type="Ubuntu",
             require_a11y_tree=False
@@ -555,6 +574,127 @@ class EnvWorker():
         self.history_images = []
         self.history_messages = []
     
+        self.reset_train_tensors()
+
+    def reset_train_tensors(self):
+        # for training
+        self.input_ids = torch.zeros((0,), dtype=torch.int64)
+        self.labels = torch.full((0,), -100, dtype=torch.int64)
+        self.attention_mask = torch.zeros((0, ), dtype=torch.int64)
+
+        self.pixel_values = None
+        self.image_grid_thw = None
+
+    def load_content(self, content):
+        if isinstance(content, str):
+            return content
+        
+        if isinstance(content, list):
+            return ''.join([self.load_content(c) for c in content])
+
+        if isinstance(content, dict):
+            if "text" in content:
+                return content["text"]
+            elif "image" in content:
+                return "<|vision_start|><|image_pad|><|vision_end|>"
+        
+        raise ValueError(f"Unknown content type: {content}")
+    
+    def process_message(self, message):
+        tokenizer = self.tokenizer
+        processor = self.processor
+        
+        image_inputs, video_inputs, video_kwargs = process_vision_info(
+            message, return_video_kwargs=True)
+
+        input_ids = []
+        labels = []
+        attention_mask = []
+
+        image_count = 0
+        pixel_values = []
+        image_grid_thw = []
+        for turn_idx, msg in enumerate(message):
+            role = msg['role']
+            content = self.load_content(msg['content'])
+            prompt = f'<|im_start|>{role}\n' + content + '<|im_end|>\n'
+
+            cur_image_num = prompt.count("<|image_pad|>")                
+            if cur_image_num > 0:
+                result = processor(image_inputs[image_count:image_count+cur_image_num], [prompt], add_special_tokens=False, return_tensors="pt")
+                image_count += cur_image_num
+            else:
+                result = processor(None, [prompt], add_special_tokens=False, return_tensors="pt")
+            
+            cur_input_ids = result.pop('input_ids')[0]
+            cur_attention_mask = result.pop('attention_mask')[0]
+            if 'pixel_values' in result: # 10764, 1176
+                pixel_values.append(result["pixel_values"])
+            if 'image_grid_thw' in result:
+                image_grid_thw.append(result["image_grid_thw"])
+            
+
+            input_ids.append(cur_input_ids)
+            attention_mask.append(cur_attention_mask)
+            if role in ["system", "user"]:
+                labels.append(torch.full_like(cur_input_ids, -100))
+            else:
+                labels.append(cur_input_ids)
+
+        input_ids = torch.cat(input_ids, dim=0)
+        labels = torch.cat(labels, dim=0)
+        attention_mask = torch.cat(attention_mask, dim=0)  
+
+        self.input_ids = torch.cat([self.input_ids, input_ids], dim=0)
+        self.labels = torch.cat([self.labels, labels], dim=0)
+        self.attention_mask = torch.cat([self.attention_mask, attention_mask], dim=0)
+
+        pixel_values = torch.cat(pixel_values, dim=0) if len(pixel_values) > 0 else None
+        image_grid_thw = torch.cat(image_grid_thw, dim=0) if len(image_grid_thw) > 0 else None
+
+        if self.pixel_values is None:
+            self.pixel_values = pixel_values
+        else:
+            if pixel_values is not None:
+                self.pixel_values = torch.cat([self.pixel_values, pixel_values], dim=0)
+        
+        if self.image_grid_thw is None:
+            self.image_grid_thw = image_grid_thw
+        else:
+            if image_grid_thw is not None:
+                self.image_grid_thw = torch.cat([self.image_grid_thw, image_grid_thw], dim=0)
+            
+
+    def get_train_dict(self):
+        position_ids = get_rope_index(
+                self.processor,
+                input_ids=self.input_ids,
+                image_grid_thw=self.image_grid_thw,
+                attention_mask=self.attention_mask,
+            )
+        
+        input_ids, attention_mask, position_ids, labels = VF.postprocess_data(
+                input_ids=self.input_ids,
+                attention_mask=self.attention_mask,
+                position_ids=position_ids,
+                max_length=self.config.data.max_prompt_length,
+                pad_token_id=self.tokenizer.pad_token_id,
+                left_pad=True,
+                truncation='right',
+                labels=self.labels
+            )
+        data = {
+            'input_ids': input_ids,
+            'labels': labels,
+            'position_ids': position_ids,
+            'attention_mask': attention_mask,
+        }
+        if self.pixel_values is not None:
+            multi_modal_inputs = dict()
+            multi_modal_inputs['pixel_values'] = self.pixel_values
+            multi_modal_inputs['image_grid_thw'] = self.image_grid_thw
+            data['multi_modal_inputs'] = multi_modal_inputs
+        return data
     
     def reset(self, task_config):
 
@@ -562,6 +702,8 @@ class EnvWorker():
         self.task_config = task_config
         self.step_counter = 0
         self.is_done = False
+
+        self.reset_train_tensors()
 
         trial_time = 0
         while trial_time < 8:
@@ -577,7 +719,12 @@ class EnvWorker():
             self.is_init = True
             self.is_done = True
             print('Env reset failed after 8 trials: ', task_config)
-            return {"env_idx": self.worker_idx, "obs_messages": None, "is_done": self.is_done, 'format_reward': 0.0}
+            return {
+                "env_idx": self.worker_idx,
+                "obs_messages": None,
+                "is_done": self.is_done,
+                'format_reward': 0.0
+            }
 
         # self.agent.reset()
         self.is_init = True
@@ -655,9 +802,16 @@ class EnvWorker():
         self.history_images = [init_image]
         self.history_messages = init_messages
 
+        self.process_message(init_messages)
+
         # since the prediction time can be very long for multienv, we pause the env to avoid automatically locking screen. 
         self.env.pause()
-        return {'env_idx': self.worker_idx, 'obs_messages': self.history_messages, 'is_done': self.is_done, 'format_reward': 0.0}
+        return {
+            'env_idx': self.worker_idx,
+            'obs_messages': self.history_messages,
+            'is_done': self.is_done,
+            'format_reward': 0.0
+        }
     
     def step(self, prediction):
 
@@ -720,7 +874,7 @@ class EnvWorker():
 
         self.env.unpause()
         for action in actions:
-            obs, reward, step_done, info = self.env.step(action)
+            obs, reward, step_done, info = self.env.step(action, pause=0.5)
         
             if step_done:
                 self.is_done = True
@@ -753,7 +907,13 @@ class EnvWorker():
             if obs['screenshot'] is None:
                 self.is_done = True
                 # failed to get screenshot
-                return {'env_idx': self.worker_idx, 'obs_messages': None, 'is_done': self.is_done, 'format_reward': format_reward}
+                self.process_message(self.history_messages[-1:]) # gpt answer only
+                return {
+                    'env_idx': self.worker_idx,
+                    'obs_messages': None,
+                    'is_done': self.is_done,
+                    'format_reward': format_reward
+                }
 
             image_base64 = base64.b64encode(BytesIO(obs['screenshot']).getvalue()).decode('utf-8')
 
@@ -768,9 +928,21 @@ class EnvWorker():
                     }
                 ]
             })
-            return {'env_idx': self.worker_idx, 'obs_messages': self.history_messages, 'is_done': self.is_done, 'format_reward': format_reward}
+            self.process_message(self.history_messages[-2:]) # gpt answer + next image
+            return {
+                'env_idx': self.worker_idx,
+                'obs_messages': self.history_messages,
+                'is_done': self.is_done,
+                'format_reward': format_reward
+            }
         else:
-            return {'env_idx': self.worker_idx, 'obs_messages': None, 'is_done': self.is_done, 'format_reward': format_reward}
+            self.process_message(self.history_messages[-1:]) # gpt answer only
+            return {
+                'env_idx': self.worker_idx,
+                'obs_messages': None,
+                'is_done': self.is_done,
+                'format_reward': format_reward
+            }
             
     
     def evaluate(self):

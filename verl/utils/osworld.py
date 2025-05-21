@@ -264,7 +264,7 @@ class GRPODatasetProcessor:
         
         raise ValueError(f"Unknown content type: {content}")
 
-    def process(self, message):
+    def process(self, message, post_process=True):
         tokenizer = self.tokenizer
         processor = self.processor
 
@@ -343,16 +343,17 @@ class GRPODatasetProcessor:
             position_ids = torch.zeros((3, 0), dtype=torch.int64)
             model_inputs = dict()
 
-        input_ids, attention_mask, position_ids, labels = VF.postprocess_data(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            max_length=self.max_prompt_length,
-            pad_token_id=self.tokenizer.pad_token_id,
-            left_pad=True,
-            truncation=self.truncation,
-            labels=labels
-        )
+        if post_process:
+            input_ids, attention_mask, position_ids, labels = VF.postprocess_data(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                max_length=self.max_prompt_length,
+                pad_token_id=self.tokenizer.pad_token_id,
+                left_pad=True,
+                truncation=self.truncation,
+                labels=labels
+            )
         row_dict = dict()
         row_dict["input_ids"] = input_ids
         row_dict["labels"] = labels
