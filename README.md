@@ -1,177 +1,183 @@
-# EasyR1: An Efficient, Scalable, Multi-Modality RL Training Framework
 
-[![GitHub Repo stars](https://img.shields.io/github/stars/hiyouga/EasyR1)](https://github.com/hiyouga/EasyR1/stargazers)
-[![Twitter](https://img.shields.io/twitter/follow/llamafactory_ai)](https://twitter.com/llamafactory_ai)
+# 🧠 ARPO: End-to-End Policy Optimization for GUI Agents with Experience Replay
 
-This project is a clean fork of the original [veRL](https://github.com/volcengine/verl) project to support vision language models, we thank all the authors for providing such a high-performance RL training framework.
+[ARPO Banner](https://github.com/dvlab-research/ARPO/assets/traj_reward.png) <!-- Replace with actual image if available -->
 
-EasyR1 is efficient and scalable due to the design of **[HybirdEngine](https://arxiv.org/abs/2409.19256)** and the latest release of **[vLLM](https://github.com/vllm-project/vllm)**'s SPMD mode.
+This repository contains the code and models for the paper:
 
-## Features
+> **ARPO: End-to-End Policy Optimization for GUI Agents with Experience Replay**  
+> *Fanbin Lu, Zhisheng Zhong, Shu Liu, Chi-Wing Fu, Jiaya Jia*  
+> CUHK, SmartMore, HKUST  
+> [[Paper](https://github.com/dvlab-research/ARPO/)] • [[Project Page](https://github.com/dvlab-research/ARPO)] • [[Model on HF](https://huggingface.co/Fanbin/ARPO_UITARS1.5_7B)]
 
-- Supported models
-  - Llama3/Qwen2/Qwen2.5 language models
-  - Qwen2/Qwen2.5-VL vision language models
-  - DeepSeek-R1 distill models
+---
 
-- Supported algorithms
-  - GRPO
-  - Reinforce++
-  - ReMax
-  - RLOO
+## 🧠 Overview
 
-- Supported datasets
-  - Any text, vision-text dataset in a [specific format](#custom-dataset)
+**ARPO (Agentic Replay Policy Optimization)** is a novel reinforcement learning framework designed to train **vision-language GUI agents** to complete **long-horizon desktop tasks**. It builds upon **Group Relative Policy Optimization (GRPO)** and introduces:
 
-- Supported tricks
-  - Padding-free training
-  - Resuming from checkpoint
-  - Wandb & SwanLab & Mlflow & Tensorboard tracking
+- **Distributed Rollouts**: Scalable task execution across parallel OSWorld environments with docker.  
+- **Multi-modal Input Support**: Processes long histories (15 steps) of screenshots + actions in an end-to-end way.
 
-## Requirements
+> Access our [model](https://huggingface.co/Fanbin/ARPO_UITARS1.5_7B) on huggingface and view [training logs](https://wandb.ai/fanbinlu/arpo) on the Weights & Biases.
+---
 
-### Software Requirements
+## 📊 Results on OSWorld
 
-- Python 3.9+
-- transformers>=4.49.0
-- flash-attn>=2.4.3
-- vllm>=0.7.3
+| Model                        |  128 training tasks | OSWorld overall|
+|-----------------------------|---------|-------|
+| UI-Tars-1.5                |68.7% | 23.5%   | 
+| UI-Tars-1.5 + GRPO         |72.9% | 26.0%   | 
+| **UI-Tars-1.5 + ARPO (Ours)** |83.9% | **29.9%** |
 
-We provide a [Dockerfile](./Dockerfile) to easily build environments.
+> Evaluated with a max of **15 steps per trajectory**.
 
-We recommend using the [pre-built docker image](https://hub.docker.com/r/hiyouga/verl) in EasyR1.
+---
+
+## 🛠 Installation
+
+### 1. Clone the repository and create environment
 
 ```bash
-# stable
-docker pull hiyouga/verl:ngc-th2.5.1-cu120-vllm0.7.4-hotfix
-# nightly
-docker pull hiyouga/verl:ngc-th2.6.0-cu120-vllm0.8.2
+git clone https://github.com/dvlab-research/ARPO.git
+cd ARPO
+
+# Create and activate Conda environment
+conda create -n arpo python=3.10
+conda activate arpo
+
+# Install Python dependencies
+pip install -r requirements.txt
 ```
 
-### Hardware Requirements
-
-\* *estimated*
-
-| Method                   | Bits |  1.5B  |   3B   |   7B   |   32B   |
-| ------------------------ | ---- | ------ | ------ | ------ | ------- |
-| GRPO Full Fine-Tuning    |  AMP | 2*24GB | 4*40GB | 8*40GB | 16*80GB |
-| GRPO Full Fine-Tuning    | BF16 | 1*24GB | 1*40GB | 4*40GB |  8*80GB |
-
-> [!NOTE]
-> Use `worker.actor.fsdp.torch_dtype=bf16` and `worker.actor.optim.strategy=adamw_bf16` to enable bf16 training.
->
-> We are working hard to reduce the VRAM in RL training, LoRA support will be integrated in next updates.
-
-## Tutorial: Run Qwen2.5-VL GRPO on [Geometry3K](https://huggingface.co/datasets/hiyouga/geometry3k) Dataset in Just 3 Steps
-
-![image](assets/qwen2_5_vl_7b_geo.png)
-
-### Installation
+### 2. Install OSWorld
 
 ```bash
-git clone https://github.com/hiyouga/EasyR1.git
-cd EasyR1
+cd OSWorld
 pip install -e .
+cd ..
 ```
 
-### GRPO Training
+> 💡 We strongly recommend running a full evaluation **with Docker** before training to prepare the docker image, Ubuntu VM data, and cache_dir required.
+
+---
+
+## ⚙️ Setup for Evaluation with OSWorld
+
+To evaluate ARPO on the **OSWorld** benchmark with the [released model](https://huggingface.co/Fanbin/ARPO_UITARS1.5_7B) using Docker-based virtual environments, follow these steps:
+
+### 1. **Prepare the Environment**
+
+Ensure you have correctly installed [OSWorld](https://github.com/xlang-ai/OSWorld) by following its Docker setup instructions (Docker with KVM support recommended). Once OSWorld is set up:
 
 ```bash
-bash examples/qwen2_5_vl_7b_geo3k_grpo.sh
+nohup bash start_server.sh &
 ```
 
-### Merge Checkpoint in Hugging Face Format
+### 2. **Run Evaluation Script**
+
+Navigate into the OSWorld directory and execute the evaluation script:
 
 ```bash
-python3 scripts/model_merger.py --local_dir checkpoints/easy_r1/exp_name/global_step_1/actor
+cd OSWorld
+
+python run_multienv_uitars.py \
+    --headless \
+    --observation_type screenshot \
+    --max_steps 15 \
+    --max_trajectory_length 15 \
+    --temperature 0.6 \
+    --model ui-tars \
+    --action_space pyautogui \
+    --num_envs 8 \
+    --result_dir ./results/ \
+    --test_all_meta_path ./evaluation_examples/test_all.json \
+    --trial-id 0 \
+    --server_ip http://127.0.0.1
 ```
 
-> [!TIP]
-> If you encounter issues with connecting to Hugging Face, consider using `export HF_ENDPOINT=https://hf-mirror.com`.
->
-> If you want to use SwanLab logger, consider using `bash examples/qwen2_5_vl_7b_geo3k_swanlab.sh`.
+### ✅ Parameters Explained
 
-## Custom Dataset
+- `--headless`: Enables headless mode (no GUI rendering).
+- `--observation_type screenshot`: Use visual observations for the agent.
+- `--max_steps` / `--max_trajectory_length`: Limit per-task interaction steps.
+- `--temperature`: Sampling temperature for model output.
+- `--model`: Name of the model.
+- `--num_envs`: Number of parallel environments (VMs).
+- `--result_dir`: Directory to store evaluation results.
+- `--test_all_meta_path`: JSON file with evaluation task metadata.
+- `--trial-id`: ID for the evaluation trial.
+- `--server_ip`: IP of the evaluation server (usually localhost).
 
-Please refer to the example datasets to prepare your own dataset.
+You will find vmware_vm_data/, docker_vm_data, cache folders under the OSWorld after evaluation.
+---
 
-- Text dataset: https://huggingface.co/datasets/hiyouga/math12k
-- Vision-text dataset: https://huggingface.co/datasets/hiyouga/geometry3k
+## ⚙️ Setup for GRPO Training
 
-> [!TIP]
-> EasyR1 already supports multi-image dataset.
-
-## How to Understand GRPO in EasyR1
-
-![image](assets/easyr1_grpo.png)
-
-- To learn about the GRPO algorithm, you can refer to [Hugging Face's blog](https://huggingface.co/docs/trl/v0.15.2/en/grpo_trainer).
-
-## How to Run 70B+ Model in Multi-node Environment
-
-Please see the **[veRL's official doc](https://verl.readthedocs.io/en/latest/start/multinode.html)** for multi-node training and Ray debugger.
-
-## Other Baselines
-
-We also reproduced the following two baselines of the [R1-V](https://github.com/deep-agent/R1-V) project.
-- [CLEVR-70k-Counting](examples/baselines/qwen2_5_vl_3b_clevr.sh): Train the Qwen2.5-VL-3B-Instruct model on counting problem.
-- [GeoQA-8k](examples/baselines/qwen2_5_vl_3b_geoqa8k.sh): Train the Qwen2.5-VL-3B-Instruct model on GeoQA problem.
-
-## Awesome Work using EasyR1
-
-- **MMR1**: Advancing the Frontiers of Multimodal Reasoning. [![[code]](https://img.shields.io/github/stars/LengSicong/MMR1)](https://github.com/LengSicong/MMR1)
-- **Vision-R1**: Incentivizing Reasoning Capability in Multimodal Large Language Models. [![[code]](https://img.shields.io/github/stars/Osilly/Vision-R1)](https://github.com/Osilly/Vision-R1) [![[arxiv]](https://img.shields.io/badge/arxiv-2503.06749-blue)](https://arxiv.org/abs/2503.06749)
-- **Seg-Zero**: Reasoning-Chain Guided Segmentation via Cognitive Reinforcement. [![[code]](https://img.shields.io/github/stars/dvlab-research/Seg-Zero)](https://github.com/dvlab-research/Seg-Zero) [![[arxiv]](https://img.shields.io/badge/arxiv-2503.06520-blue)](https://arxiv.org/abs/2503.06520)
-- **MetaSpatial**: Reinforcing 3D Spatial Reasoning in VLMs for the Metaverse. [![[code]](https://img.shields.io/github/stars/PzySeere/MetaSpatial)](https://github.com/PzySeere/MetaSpatial) [![[arxiv]](https://img.shields.io/badge/arxiv-2503.18470-blue)](https://arxiv.org/abs/2503.18470)
-- **Temporal-R1**: Envolving Temporal Reasoning Capability into LMMs via Temporal Consistent Reward
- [![[code]](https://img.shields.io/github/stars/appletea233/Temporal-R1)](https://github.com/appletea233/Temporal-R1)
-## TODO
-
-- Support LoRA (high priority).
-- Support ulysses parallelism for VLMs (middle priority).
-- Support more VLM architectures.
-
-> [!NOTE]
-> We will not provide scripts for supervised fine-tuning and inference in this project. If you have such requirements, we recommend using [LLaMA-Factory](https://github.com/hiyouga/LLaMA-Factory).
-
-### Known bugs
-
-These features are temporarily disabled for now, we plan to fix them one-by-one in the future updates.
-
-- Vision language models are not compatible with ulysses parallelism yet.
-
-## Discussion Group
-
-👋 Join our [WeChat group](assets/wechat.jpg).
-
-## FAQs
-
-> RuntimeError: CUDA Error: out of memory at /workspace/csrc/cumem_allocator.cpp:62
-
-Reduce the `worker.rollout.gpu_memory_utilization`.
-
-## Citation
-
-Core contributors: [Yaowei Zheng](https://github.com/hiyouga), [Junting Lu](https://github.com/AL-377), [Shenzhi Wang](https://github.com/Shenzhi-Wang), [Zhangchi Feng](https://github.com/BUAADreamer), [Dongdong Kuang](https://github.com/Kuangdd01) and Yuwen Xiong
-
-We also thank Guangming Sheng and Chi Zhang for helpful discussions.
-
-```bibtex
-@misc{zheng2025easyr1,
-  title        = {EasyR1: An Efficient, Scalable, Multi-Modality RL Training Framework},
-  author       = {Yaowei Zheng, Junting Lu, Shenzhi Wang, Zhangchi Feng, Dongdong Kuang, Yuwen Xiong},
-  howpublished = {\url{https://github.com/hiyouga/EasyR1}},
-  year         = {2025}
-}
+```bash
+# Link evaluation examples and cache
+ln -s OSWorld/evaluation_examples ./
+mkdir cache_dirs/
+ln -s OSWorld/cache ./cache_dirs/cache_0
+ln -s OSWorld/vmware_vm_data ./
+ln -s OSWorld/docker_vm_data ./
 ```
 
-We recommend to also cite the original work.
+### Docker Permissions
 
-```bibtex
-@article{sheng2024hybridflow,
-  title   = {HybridFlow: A Flexible and Efficient RLHF Framework},
-  author  = {Guangming Sheng and Chi Zhang and Zilingfeng Ye and Xibin Wu and Wang Zhang and Ru Zhang and Yanghua Peng and Haibin Lin and Chuan Wu},
-  year    = {2024},
-  journal = {arXiv preprint arXiv: 2409.19256}
-}
+To run Docker without `sudo`:
+
+```bash
+sudo usermod -aG docker $USER
+newgrp docker
 ```
+
+---
+
+## 🧪 Training ARPO with OSWorld (Distributed)
+
+### Single Node (subset training: 32 tasks)
+
+```bash
+bash ./examples/osworld_subset32.sh
+```
+
+### Multi-Node Setup with Ray (e.g. 8 nodes, 128 envs)
+
+On **Ray master node**:
+
+```bash
+RAY_PORT=2468
+RAY_HEAD_IP=<Your IP>
+ray start --head --port=$RAY_PORT --resources='{"docker:'$RAY_HEAD_IP'": 128}'
+```
+
+On **Ray slave nodes** (with GPU):
+
+```bash
+ray start --address=$RAY_HEAD_IP:$RAY_PORT --num-gpus=8 --resources='{"docker:'$CURRENT_IP'": 128}'
+```
+
+Or (CPU only):
+
+```bash
+ray start --address=$RAY_HEAD_IP:$RAY_PORT --resources='{"docker:'$CURRENT_IP'": 128}'
+```
+
+Then run:
+
+```bash
+bash ./examples/osworld_full_arpo.sh
+```
+
+---
+
+## 🔗 Related Projects
+
+- [OSWorld](https://github.com/FanbinLu/OSWorld) — Realistic GUI environments for multimodal agents modified for GRPO training.
+- [EasyR1](https://github.com/hiyouga/EasyR1) An efficient, scalable, multi-modality RL training framework based on veRL, supporting advanced VLMs and algorithms like GRPO.
+---
+
+## 📄 Citation
+
+If you find ARPO useful, please consider citing our work.
