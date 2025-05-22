@@ -1,26 +1,25 @@
 
-# 🧠 ARPO: End-to-End Policy Optimization for GUI Agents with Experience Replay
-
-[ARPO Banner](https://github.com/dvlab-research/ARPO/assets/traj_reward.png) <!-- Replace with actual image if available -->
+# ARPO: End-to-End Policy Optimization for GUI Agents with Experience Replay
 
 This repository contains the code and models for the paper:
 
 > **ARPO: End-to-End Policy Optimization for GUI Agents with Experience Replay**  
 > *Fanbin Lu, Zhisheng Zhong, Shu Liu, Chi-Wing Fu, Jiaya Jia*  
 > CUHK, SmartMore, HKUST  
-> [[Paper](https://github.com/dvlab-research/ARPO/)] • [[Project Page](https://github.com/dvlab-research/ARPO)] • [[Model on HF](https://huggingface.co/Fanbin/ARPO_UITARS1.5_7B)]
+> [[Paper](https://github.com/dvlab-research/ARPO/paper.pdf)] • [[Project Page](https://github.com/dvlab-research/ARPO)] • [[Model on HF](https://huggingface.co/Fanbin/ARPO_UITARS1.5_7B)]
 
----
-
-## 🧠 Overview
+## Overview
 
 **ARPO (Agentic Replay Policy Optimization)** is a novel reinforcement learning framework designed to train **vision-language GUI agents** to complete **long-horizon desktop tasks**. It builds upon **Group Relative Policy Optimization (GRPO)** and introduces:
 
 - **Distributed Rollouts**: Scalable task execution across parallel OSWorld environments with docker.  
 - **Multi-modal Input Support**: Processes long histories (15 steps) of screenshots + actions in an end-to-end way.
 
-> Access our [model](https://huggingface.co/Fanbin/ARPO_UITARS1.5_7B) on huggingface and view [training logs](https://wandb.ai/fanbinlu/arpo) on the Weights & Biases.
----
+Access our [model](https://huggingface.co/Fanbin/ARPO_UITARS1.5_7B) on huggingface and view [training logs](https://wandb.ai/fanbinlu/arpo) on the Weights & Biases.
+
+<p align="center">
+<img src="assets/traj_reward.png" alt="Trajectory reward during trainig" width="500">
+</p>
 
 ## 📊 Results on OSWorld
 
@@ -60,15 +59,14 @@ cd ..
 
 > 💡 We strongly recommend running a full evaluation **with Docker** before training to prepare the docker image, Ubuntu VM data, and cache_dir required.
 
----
 
 ## ⚙️ Setup for Evaluation with OSWorld
 
-To evaluate ARPO on the **OSWorld** benchmark with the [released model](https://huggingface.co/Fanbin/ARPO_UITARS1.5_7B) using Docker-based virtual environments, follow these steps:
+To evaluate ARPO on the OSWorld benchmark with the [released model](https://huggingface.co/Fanbin/ARPO_UITARS1.5_7B) using Docker-based virtual environments, follow these steps:
 
 ### 1. **Prepare the Environment**
 
-Ensure you have correctly installed [OSWorld](https://github.com/xlang-ai/OSWorld) by following its Docker setup instructions (Docker with KVM support recommended). Once OSWorld is set up:
+Ensure you have correctly installed [OSWorld](https://github.com/xlang-ai/OSWorld) by following its Docker setup instructions. Once OSWorld is set up:
 
 ```bash
 nohup bash start_server.sh &
@@ -109,7 +107,7 @@ python run_multienv_uitars.py \
 - `--trial-id`: ID for the evaluation trial.
 - `--server_ip`: IP of the evaluation server (usually localhost).
 
-You will find vmware_vm_data/, docker_vm_data, cache folders under the OSWorld after evaluation.
+> You will find vmware_vm_data/, docker_vm_data/, and cache/ folders under the OSWorld after evaluation.
 ---
 
 ## ⚙️ Setup for GRPO Training
@@ -123,8 +121,6 @@ ln -s OSWorld/vmware_vm_data ./
 ln -s OSWorld/docker_vm_data ./
 ```
 
-### Docker Permissions
-
 To run Docker without `sudo`:
 
 ```bash
@@ -134,11 +130,14 @@ newgrp docker
 
 ---
 
-## 🧪 Training ARPO with OSWorld (Distributed)
+## Training ARPO/GRPO with OSWorld
 
 ### Single Node (subset training: 32 tasks)
-
+If you only have one node, we suggest training on a subset of OSWorld tasks with at most 16 Docker environments.
 ```bash
+RAY_PORT=2468
+RAY_HEAD_IP=<Your IP>
+ray start --head --port=$RAY_PORT --resources='{"docker:'$RAY_HEAD_IP'": 128}'
 bash ./examples/osworld_subset32.sh
 ```
 
