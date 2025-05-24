@@ -114,11 +114,11 @@ python run_multienv_uitars.py \
 
 ```bash
 # Link evaluation examples and cache
-ln -s OSWorld/evaluation_examples ./
+ln -s $(pwd)/OSWorld/evaluation_examples ./
 mkdir cache_dirs/
-ln -s OSWorld/cache ./cache_dirs/cache_0
-ln -s OSWorld/vmware_vm_data ./
-ln -s OSWorld/docker_vm_data ./
+ln -s $(pwd)/OSWorld/cache ./cache_dirs/cache_0
+ln -s $(pwd)/OSWorld/vmware_vm_data ./
+ln -s $(pwd)/OSWorld/docker_vm_data ./
 ```
 
 To run Docker without `sudo`:
