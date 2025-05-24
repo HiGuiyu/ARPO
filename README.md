@@ -50,7 +50,7 @@ pip install -r requirements.txt
 ```
 
 ### 2. Install OSWorld
-
+Follow the origin installation guide of [OSWorld](https://github.com/xlang-ai/OSWorld) if you only want to evaluate the model. If you want to train with GRPO, you are required to pip install it.
 ```bash
 cd OSWorld
 pip install -e .
