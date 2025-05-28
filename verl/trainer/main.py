@@ -28,8 +28,7 @@ from .config import PPOConfig
 from .ray_trainer import RayPPOTrainer, ResourcePoolManager, Role
 
 
-# please make sure main_task is not scheduled on head
-@ray.remote(num_cpus=1, resources={"docker:10.1.1.3": 1})
+@ray.remote(num_cpus=1)
 class Runner:
     """A runner for RL training."""
 
