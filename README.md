@@ -6,7 +6,7 @@ This repository contains the code and models for the paper:
 > **ARPO: End-to-End Policy Optimization for GUI Agents with Experience Replay**  
 > *Fanbin Lu, Zhisheng Zhong, Shu Liu, Chi-Wing Fu, Jiaya Jia*  
 > CUHK, SmartMore, HKUST  
-> [[Paper](https://github.com/dvlab-research/ARPO/paper.pdf)] • [[Project Page](https://github.com/dvlab-research/ARPO)] • [[Model on HF](https://huggingface.co/Fanbin/ARPO_UITARS1.5_7B)]
+> [[Paper](https://arxiv.org/abs/2505.16282)] • [[Project Page](https://github.com/dvlab-research/ARPO)] • [[Model on HF](https://huggingface.co/Fanbin/ARPO_UITARS1.5_7B)]
 
 ## Overview
 

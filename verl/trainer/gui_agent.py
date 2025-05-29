@@ -14,26 +14,6 @@ from qwen_vl_utils import process_vision_info
 from desktop_env.desktop_env import DesktopEnv
 
 
-steve_system_prompt = '''\
-You are STEVE, an AI that completes tasks on a user's computer with mouse and keyboard operations. Your role as an assistant involves thoroughly exploring the user task through a systematic long thinking process before providing the final precise and accurate solutions. This requires engaging in a comprehensive cycle of screenshot analysis, action reflection, task planning and error backtracing to complete the user task step-by-step. Please structure your response into two main sections: Thought and Solution. In the Thought section, detail your reasoning process using the specified format: <|begin_of_thought|> thought <|end_of_thought|> Each step should include detailed considerations such as screenshot analysis, summarizing relevant findings, brainstorming new ideas, verifying the accuracy of the current steps, refining any errors, and revisiting previous steps. In the Solution section, based on various attempts, explorations, and reflections from the Thought section, systematically present the final solution that you deem correct. The solution should remain a logical, accurate, concise expression style and detail necessary step needed to reach the conclusion, formatted as follows: <|begin_of_solution|> {thoughts, rationale, decision, python(optional)} <|end_of_solution|>"""
-
-You can use the following functions:
-```python
-computer.mouse.move(<|object_ref_start|>"target_element"<|object_ref_end|><|point_start|>(x,y)<|point_end|>)
-computer.mouse.single_click()
-computer.mouse.double_click()
-computer.mouse.right_click() 
-computer.mouse.scroll(dir="up/down")
-computer.mouse.drag(<|object_ref_start|>"target_element"<|object_ref_end|><|point_start|>(x,y)<|point_end|>) # drag from current cursor position to the element
-
-computer.keyboard.write("text")
-computer.keyboard.press("key") # press a key once (donw and up)
-computer.keyboard.keyDown("key") # press and hold a key
-computer.keyboard.keyUp("key") # release a key
-computer.keyboard.hotkey("key1", "key2", ...) # press multiple keys simultaneously to trigger a shortcut
-
-```
-'''
 
 
 uitars_system_prompt = """You are a GUI agent. You are given a task and your action history, with screenshots. You need to perform the next action to complete the task.
@@ -735,69 +715,37 @@ class EnvWorker():
 
         image_base64 = base64.b64encode(BytesIO(init_image).getvalue()).decode("utf-8")
 
-        if self.model == 'steve':
-            init_messages = [
-                {
-                    "role": "system",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "You are a helpful assistant."
-                        }
-                    ]
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": self.system_prompt
-                        },
-                        {
-                            "type": "image",
-                            "image": f"data:image/jpeg;base64,{image_base64}",
-                            "min_pixels": 3136,
-                            "max_pixels": 2116800,
-                        },
-                        {
-                            "type": "text",
-                            "text": f"User task: {self.instruction}. Please generate the next move."
-                        }
-                    ]
-                }
-            ]
-        else:
-            init_messages = [
-                {
-                    "role": "system",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "Your are a helpful assistant."
-                        }
-                    ]
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": self.system_prompt.format(instruction=self.instruction)
-                        }
-                    ]
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "image": f"data:image/jpeg;base64,{image_base64}",
-                            "min_pixels": 3136,
-                            "max_pixels": 2116800,
-                        }
-                    ]
-                }
-            ]
+        init_messages = [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Your are a helpful assistant."
+                    }
+                ]
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": self.system_prompt.format(instruction=self.instruction)
+                    }
+                ]
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "image": f"data:image/jpeg;base64,{image_base64}",
+                        "min_pixels": 3136,
+                        "max_pixels": 2116800,
+                    }
+                ]
+            }
+        ]
 
         self.history_images = [init_image]
         self.history_messages = init_messages
