@@ -38,9 +38,9 @@ Access our [model](https://huggingface.co/Fanbin/ARPO_UITARS1.5_7B) on huggingfa
 ### 1. Clone the repository and create environment
 
 ```bash
-git clone --recurse-submodules git@github.com:dvlab-research/ARPO.git
+git clone --recurse-submodules git@github.com:HiGuiyu/ARPO.git
 cd ARPO
-cd ARPO
+
 git submodule sync
 git submodule update --init --recursive
 # Create and activate Conda environment
